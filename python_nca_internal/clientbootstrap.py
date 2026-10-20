@@ -19,7 +19,7 @@ import __builtin__
 LOG_NAME = 'client_mod.log'
 
 # Modules whose first import is logged: the mission tables and the language manager.
-WATCH_WORDS = ('mission', 'clientlanguagemanager')
+WATCH_WORDS = ('mission', 'objectiveconversation', 'clientlanguagemanager')
 
 
 def _log(message):
@@ -84,10 +84,48 @@ def _apply_text_overrides(name, module):
         _log('text %s %d set to %r' % (table, text_id, text))
 
 
+# Mission tables and how a MISSIONS entry becomes their rows. Each row value is a
+# one-element list, as in the retail tables (e.g. missionconversation[(427, 1)] == [733]).
+def _mission_rows(table, mission_id, mission):
+    rows = {}
+    if table == 'missionconversation':
+        for text_type, text_id in mission.get('texts', {}).items():
+            rows[(mission_id, text_type)] = [text_id]
+    elif table == 'missionobjective':
+        for objective_id, texts in mission.get('objectives', {}).items():
+            # (name text, body text, three counter texts)
+            rows[(mission_id, objective_id)] = [(texts[0], texts[1], None, None, None)]
+    elif table == 'objectiveconversation':
+        for key, text_id in mission.get('conversations', {}).items():
+            objective_id, package_id, flag, conversation_type = key
+            rows[(mission_id, objective_id, package_id, flag, conversation_type)] = [text_id]
+    return rows
+
+
+MISSION_TABLES = ('missionconversation', 'missionobjective', 'objectiveconversation')
+
+
+def _apply_missions(table, module):
+    import clientmod_data
+    lookup = module.lookup
+    for mission_id, mission in clientmod_data.MISSIONS.items():
+        rows = _mission_rows(table, mission_id, mission)
+        for key, value in rows.items():
+            if key in lookup:
+                _log('mission %d: %s %r already exists in the client, left alone' % (mission_id, table, key))
+                continue
+            lookup[key] = value
+        _log('mission %d: %d %s rows added' % (mission_id, len(rows), table))
+
+
 def _on_module_loaded(name, module):
     _log('loaded %s (%s)' % (name, getattr(module, '__file__', '?')))
-    if name.startswith('generated.client.language.') and hasattr(module, 'lookup'):
+    if not hasattr(module, 'lookup'):
+        return
+    if name.startswith('generated.client.language.'):
         _apply_text_overrides(name, module)
+    elif name.startswith('generated.client.') and name.split('.')[-1] in MISSION_TABLES:
+        _apply_missions(name.split('.')[-1], module)
 
 
 def _scan_new_modules():
