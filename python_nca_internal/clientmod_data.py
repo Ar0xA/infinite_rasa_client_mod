@@ -74,3 +74,11 @@ MOVABLE_EXCLUDED = (
     'reticlewindow',            # the crosshair follows the screen centre
     'charactercreationwindow',  # character creation / selection screen
 )
+
+# Native modules: .pyd files (32-bit DLLs for Python 2.4) in python_nca_internal, imported
+# at boot by clientbootstrap._load_native_modules. A missing or broken one only logs a line.
+# See native_modules.md. Off by default: build the example with native/build.sh and remove
+# the '#' to load it (it logs from native code and tags the game window title).
+NATIVE_MODULES = (
+    # 'clientmod_native',
+)

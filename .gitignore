@@ -1,3 +1,5 @@
 *.pyo
 *.pyc
 client_mod.log
+__pycache__/
+*.pyd

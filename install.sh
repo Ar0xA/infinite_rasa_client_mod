@@ -24,4 +24,8 @@ mkdir -p "$DEST"
 # Compiled copies of an older version would be loaded in place of the new source.
 rm -f "$DEST"/*.pyo "$DEST"/*.pyc
 cp "$SRC"/*.py "$DEST"/
+# Native modules (.pyd), if built (native/build.sh).
+# Remove before copying: a running game has the old file mapped, and overwriting it in
+# place could crash the game; a new file leaves the mapped one alone.
+for f in "$SRC"/*.pyd; do [ -e "$f" ] && rm -f "$DEST/$(basename "$f")" && cp "$f" "$DEST"/; done
 echo "Installed into $DEST. Log: $GAME/client_mod.log"

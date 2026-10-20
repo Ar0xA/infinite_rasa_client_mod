@@ -10,7 +10,8 @@ Status: **experimental.** Tested in the client on 2026-10-20:
 - a new mission works end to end (**Infinite Rasa Welcome**, mission 90000001; see
   [create_missions.md](create_missions.md));
 - changing an existing mission text works;
-- client windows can be moved (see [Movable windows](#movable-windows)).
+- client windows can be moved (see [Movable windows](#movable-windows));
+- native code (a DLL) can run in the game process (see [native_modules.md](native_modules.md)).
 
 ## Movable windows
 
@@ -33,6 +34,14 @@ at their default places. In `python_nca_internal/clientmod_data.py`:
   and the character creation screen by default).
 
 `client_mod.log` shows `movable: <window> moved to x, y` after each drag.
+
+## Native modules (DLLs)
+
+The loader can import `.pyd` files (32-bit DLLs) from `python_nca_internal`, so native code
+runs inside the game. `native/clientmod_native.c` is a small example: it writes to
+`client_mod.log` from native code and adds ` [Infinite Rasa mod]` to the window title. It is
+off by default (`NATIVE_MODULES` in `clientmod_data.py`) and not in git as a binary; build
+it with `native/build.sh`. Details: [native_modules.md](native_modules.md).
 
 ## How it works
 
@@ -61,6 +70,8 @@ therefore imported in place of the retail module. This mod's loader:
    and `HandleMouseMove`) before `client.gameui.Initialize` registers them. The root window
    sees every click and names the clicked widget (`event['ClickedWidget']`); its parents
    lead to the window to move (`clientmod_movable.py`).
+7. at the start of `boot()`, imports the native modules in `clientmod_data.NATIVE_MODULES`
+   (none by default).
 
 The mission data lives in plain Python dictionaries once loaded, for example
 `generated.client.missionobjective.lookup` and the `lookup` of the

@@ -201,11 +201,29 @@ def _watching_import(*args, **kwargs):
     return module
 
 
+def _load_native_modules():
+    # Native modules (.pyd DLLs in python_nca_internal): importing one runs its native code.
+    import clientmod_data
+    for name in getattr(clientmod_data, 'NATIVE_MODULES', ()):
+        try:
+            module = __import__(name)
+            info = ''
+            if hasattr(module, 'info'):
+                info = ': %s' % (module.info(),)
+            _log('native module %s loaded%s' % (name, info))
+        except:
+            _log('native module %s not loaded: %s' % (name, sys.exc_info()[1]))
+
+
 def _wrap_boot(retail):
     real_boot = retail.boot
 
     def boot(*args, **kwargs):
         _log('boot: sys.path=%r' % (sys.path,))
+        try:
+            _load_native_modules()
+        except:
+            _log('native modules failed: %s' % (sys.exc_info()[1],))
         return real_boot(*args, **kwargs)
 
     retail.boot = boot
