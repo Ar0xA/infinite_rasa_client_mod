@@ -5,8 +5,9 @@ A Python-only mod for the Tabula Rasa 1.16.5.0 client, for use with
 add content the retail client does not know, starting with new missions (their
 objectives, dialogue and text).
 
-Status: **experimental, not yet tested in the client.** The first step is to prove
-that the loader runs.
+Status: **experimental.** Tested in the client on 2026-10-20: the loader runs, and
+changing an existing mission text works (objective 17243 of mission 427). New
+mission IDs are not done yet.
 
 ## How it works
 
@@ -25,7 +26,9 @@ therefore imported in place of the retail module. This mod's loader:
 
 1. loads the retail `clientbootstrap` from `trpython.zip`, so the game starts as before;
 2. wraps `boot()` and the import function, and logs when the mission tables and the
-   language manager are first imported (`client_mod.log` in the game folder).
+   language manager are first imported (`client_mod.log` in the game folder);
+3. when a language table loads, sets the texts in `clientmod_data.TEXT_OVERRIDES`.
+   Texts must be unicode: the client's text filter rejects anything else.
 
 The mission data lives in plain Python dictionaries once loaded, for example
 `generated.client.missionobjective.lookup` and the `lookup` of the
