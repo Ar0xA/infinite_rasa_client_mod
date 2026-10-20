@@ -70,6 +70,9 @@ def _apply_text_overrides(name, module):
         return
     lookup = module.lookup
     for text_id, text in overrides.items():
+        # The client's text filter asserts on anything but unicode (textfilter.FilterStaticText).
+        if not isinstance(text, unicode):
+            text = text.decode('utf-8')
         for variant in TEXT_VARIANTS:
             key = (text_id, variant)
             old = lookup.get(key)
