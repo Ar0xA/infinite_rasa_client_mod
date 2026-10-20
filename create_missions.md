@@ -8,7 +8,7 @@ parts that must match:
 
 The worked example is **Infinite Rasa Welcome** (mission `90000001`): the Rewards Verification
 Officer in Alia Das offers it at level 1; you speak to him again; he pays 100 credits and one
-Class I Basic Med Pack.
+Class I Basic Med Pack. Tested in game on 2026-10-20: offer, completion and reward work.
 
 ## 1. Pick ids
 
@@ -110,13 +110,25 @@ Steps:
    Data-only migrations have no Designer file, so put `[DbContext(typeof(SqliteWorldContext))]`
    (or `MySqlWorldContext`) and `[Migration("<timestamp>_<Name>")]` on the class, and call the
    helper from `Up`/`Down`.
-4. **Build, run the mission tests, restart the Game server.** Migrations run at start. Tests
+   **Write the rows as plain SQL (`migration.Sql`), not `InsertData`/`UpdateData`.** Without a
+   Designer file EF has no model to type them and the Game server stops at start with
+   "There is no entity type mapped to the table ... which is used in a data operation".
+   `InfiniteRasaWelcomeV1.Row` builds `INSERT` statements that SQLite and MySQL both accept.
+4. **Build, run the mission tests, restart the Game server.** Migrations run at start.
+   If a migration crashes, it leaves a row in the World database's `__EFMigrationsLock` and
+   the next start waits forever ("applying 1 migration, please wait..." and no CPU use). Stop
+   the server, back up the database, `DELETE FROM __EFMigrationsLock;`, fix, start again. Tests
    that pin the exact set of enabled missions (`WildernessCoverageTests`,
    `WildernessMigrationTests`) need the new mission added to their expectations.
 
 What the server checks: text ids must be present (not that the client has them), giver and
 receiver must exist, a Conversation trigger's package must exist in `npc_package`, rewards need
 exactly one GrantReward. It keeps no list of client mission or text ids, so 9xxxxxxx ids pass.
+
+**Without the migration:** `serverquery_addquest_welcome_infinite_rasa.sql` in this repo holds
+the exact rows the migration writes, for adding the mission to a database by hand (server
+stopped). Use the SQL file or the migration, not both. It was generated from the rows the
+migration wrote and checked against a copy of the database from before the quest (SQLite).
 
 ## 4. How it plays (talk-to-NPC mission)
 
