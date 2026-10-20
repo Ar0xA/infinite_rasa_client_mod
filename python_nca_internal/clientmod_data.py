@@ -64,3 +64,12 @@ MISSIONS = {
         },
     },
 }
+
+# Movable windows (clientmod_movable.py): drag a window with the left mouse button.
+# Positions are saved in client_mod_windows.txt in the game folder; delete it to reset.
+MOVABLE_WINDOWS = True
+# client/ui modules whose windows stay where the game puts them.
+MOVABLE_EXCLUDED = (
+    'reticlewindow',            # the crosshair follows the screen centre
+    'charactercreationwindow',  # character creation / selection screen
+)

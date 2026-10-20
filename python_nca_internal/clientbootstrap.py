@@ -19,7 +19,7 @@ import __builtin__
 LOG_NAME = 'client_mod.log'
 
 # Modules whose first import is logged: the mission tables and the language manager.
-WATCH_WORDS = ('mission', 'objectiveconversation', 'clientlanguagemanager')
+WATCH_WORDS = ('mission', 'objectiveconversation', 'clientlanguagemanager', 'client.ui.')
 
 
 def _log(message):
@@ -119,6 +119,9 @@ def _apply_missions(table, module):
 
 
 def _on_module_loaded(name, module):
+    if name.startswith('client.ui.'):
+        _on_ui_module_loaded(name, module)
+        return
     _log('loaded %s (%s)' % (name, getattr(module, '__file__', '?')))
     if not hasattr(module, 'lookup'):
         return
@@ -126,6 +129,14 @@ def _on_module_loaded(name, module):
         _apply_text_overrides(name, module)
     elif name.startswith('generated.client.') and name.split('.')[-1] in MISSION_TABLES:
         _apply_missions(name.split('.')[-1], module)
+
+
+def _on_ui_module_loaded(name, module):
+    import clientmod_data
+    if not getattr(clientmod_data, 'MOVABLE_WINDOWS', False) or not name.endswith('window'):
+        return
+    import clientmod_movable
+    clientmod_movable.patch_module(name, module, _log, getattr(clientmod_data, 'MOVABLE_EXCLUDED', ()))
 
 
 def _scan_new_modules():
