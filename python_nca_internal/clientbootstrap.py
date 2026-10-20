@@ -57,9 +57,34 @@ _seen = {}
 _module_count = [0]
 _real_import = __builtin__.__import__
 
+# Text variants: each language table holds a text twice, keyed (textId, 1) and (textId, 2).
+TEXT_VARIANTS = (1, 2)
+
+
+def _apply_text_overrides(name, module):
+    # name is e.g. generated.client.language.english.missiontextlanguage
+    import clientmod_data
+    table = name.split('.')[-1]
+    overrides = clientmod_data.TEXT_OVERRIDES.get(table)
+    if not overrides:
+        return
+    lookup = module.lookup
+    for text_id, text in overrides.items():
+        for variant in TEXT_VARIANTS:
+            key = (text_id, variant)
+            old = lookup.get(key)
+            if old is None:
+                lookup[key] = [text]
+            else:
+                # Keep the container type the table uses (a one-element list or tuple).
+                lookup[key] = type(old)([text])
+        _log('text %s %d set to %r' % (table, text_id, text))
+
 
 def _on_module_loaded(name, module):
     _log('loaded %s (%s)' % (name, getattr(module, '__file__', '?')))
+    if name.startswith('generated.client.language.') and hasattr(module, 'lookup'):
+        _apply_text_overrides(name, module)
 
 
 def _scan_new_modules():
