@@ -5,9 +5,34 @@ A Python-only mod for the Tabula Rasa 1.16.5.0 client, for use with
 add content the retail client does not know, starting with new missions (their
 objectives, dialogue and text).
 
-Status: **experimental.** Tested in the client on 2026-10-20: the loader runs, and
-changing an existing mission text works (objective 17243 of mission 427). New
-mission IDs are not done yet.
+Status: **experimental.** Tested in the client on 2026-10-20:
+
+- a new mission works end to end (**Infinite Rasa Welcome**, mission 90000001; see
+  [create_missions.md](create_missions.md));
+- changing an existing mission text works;
+- client windows can be moved (see [Movable windows](#movable-windows)).
+
+## Movable windows
+
+Drag any window to a new place:
+
+- **right mouse button**: hold it on the window and move the mouse. A right click
+  without movement still reaches the game, so context menus keep working;
+- **Ctrl + left mouse button**: the same, for one-button use.
+
+The click may land anywhere in the window, also on its title or on a button. ALT does
+not work: the client never sees ALT on a mouse click (the event's `Modifiers` list holds
+Ctrl and Shift only). The middle button is left alone, it zooms.
+
+Each window's place is saved in `client_mod_windows.txt` in the game folder and used
+again when the window opens or the game starts. Delete the file to put all windows back
+at their default places. In `python_nca_internal/clientmod_data.py`:
+
+- `MOVABLE_WINDOWS = False` turns the feature off;
+- `MOVABLE_EXCLUDED` lists `client/ui` modules whose windows never move (the reticle
+  and the character creation screen by default).
+
+`client_mod.log` shows `movable: <window> moved to x, y` after each drag.
 
 ## How it works
 
@@ -30,13 +55,12 @@ therefore imported in place of the retail module. This mod's loader:
 3. when a language table loads, sets the texts in `clientmod_data.TEXT_OVERRIDES`.
    Texts must be unicode: the client's text filter rejects anything else.
 4. when a mission table loads, adds the rows in `clientmod_data.MISSIONS`;
-5. when a `client.ui.*window` module loads, makes its windows movable
-   (`clientmod_movable.py`, experimental): hold ALT and drag a window with the left mouse
-   button. The hook sits on the game's root-window mouse handlers
-   (`client.inputhandlers`), so the click may land anywhere in the window, also on its title.
-   Positions are saved in `client_mod_windows.txt` in the game folder (delete it to reset).
-   Turn this off with `MOVABLE_WINDOWS = False` in `clientmod_data.py`, or exclude single
-   windows in `MOVABLE_EXCLUDED`.
+5. when a `client.ui.*window` module has loaded, wraps its window classes' `Init` and
+   `Show` to record each window's root widget and put it at its saved place;
+6. wraps the game's root-window mouse handlers (`client.inputhandlers.HandleOtherMouseInputs`
+   and `HandleMouseMove`) before `client.gameui.Initialize` registers them. The root window
+   sees every click and names the clicked widget (`event['ClickedWidget']`); its parents
+   lead to the window to move (`clientmod_movable.py`).
 
 The mission data lives in plain Python dictionaries once loaded, for example
 `generated.client.missionobjective.lookup` and the `lookup` of the
