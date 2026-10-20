@@ -19,7 +19,8 @@ import __builtin__
 LOG_NAME = 'client_mod.log'
 
 # Modules whose first import is logged: the mission tables and the language manager.
-WATCH_WORDS = ('mission', 'objectiveconversation', 'clientlanguagemanager', 'client.ui.')
+WATCH_WORDS = ('mission', 'objectiveconversation', 'clientlanguagemanager', 'client.ui.',
+               'client.inputhandlers')
 
 
 def _log(message):
@@ -119,8 +120,9 @@ def _apply_missions(table, module):
 
 
 def _on_module_loaded(name, module):
-    if name.startswith('client.ui.'):
-        _on_ui_module_loaded(name, module)
+    if name.startswith('client.ui.') or name == 'client.inputhandlers':
+        # The module is in sys.modules before its code has run; wait until it has.
+        _pending.append((name, module))
         return
     _log('loaded %s (%s)' % (name, getattr(module, '__file__', '?')))
     if not hasattr(module, 'lookup'):
@@ -133,10 +135,41 @@ def _on_module_loaded(name, module):
 
 def _on_ui_module_loaded(name, module):
     import clientmod_data
-    if not getattr(clientmod_data, 'MOVABLE_WINDOWS', False) or not name.endswith('window'):
+    if not getattr(clientmod_data, 'MOVABLE_WINDOWS', False):
         return
     import clientmod_movable
-    clientmod_movable.patch_module(name, module, _log, getattr(clientmod_data, 'MOVABLE_EXCLUDED', ()))
+    if name == 'client.inputhandlers':
+        clientmod_movable.patch_inputhandlers(module, _log)
+    elif name.endswith('window'):
+        clientmod_movable.patch_module(name, module, _log,
+                                       getattr(clientmod_data, 'MOVABLE_EXCLUDED', ()))
+
+
+# Modules found in sys.modules whose code may still be running: (name, module).
+_pending = []
+
+
+def _module_running(module):
+    frame = sys._getframe(1)
+    while frame is not None:
+        if frame.f_globals is module.__dict__ and frame.f_code.co_name in ('?', '<module>'):
+            return True
+        frame = frame.f_back
+    return False
+
+
+def _process_pending():
+    for item in _pending[:]:
+        name, module = item
+        if _module_running(module):
+            continue
+        _pending.remove(item)
+        if sys.modules.get(name) is not module:
+            continue  # its import failed
+        try:
+            _on_ui_module_loaded(name, module)
+        except:
+            _log('hook failed for %s: %s' % (name, sys.exc_info()[1]))
 
 
 def _scan_new_modules():
@@ -161,6 +194,8 @@ def _watching_import(*args, **kwargs):
     module = _real_import(*args, **kwargs)
     try:
         _scan_new_modules()
+        if _pending:
+            _process_pending()
     except:
         pass
     return module

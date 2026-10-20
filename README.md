@@ -31,7 +31,9 @@ therefore imported in place of the retail module. This mod's loader:
    Texts must be unicode: the client's text filter rejects anything else.
 4. when a mission table loads, adds the rows in `clientmod_data.MISSIONS`;
 5. when a `client.ui.*window` module loads, makes its windows movable
-   (`clientmod_movable.py`, experimental): drag a window with the left mouse button.
+   (`clientmod_movable.py`, experimental): hold ALT and drag a window with the left mouse
+   button. The hook sits on the game's root-window mouse handlers
+   (`client.inputhandlers`), so the click may land anywhere in the window, also on its title.
    Positions are saved in `client_mod_windows.txt` in the game folder (delete it to reset).
    Turn this off with `MOVABLE_WINDOWS = False` in `clientmod_data.py`, or exclude single
    windows in `MOVABLE_EXCLUDED`.

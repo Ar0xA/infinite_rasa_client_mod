@@ -1,32 +1,38 @@
-# Movable windows: drag a client window with the left mouse button to move it. The new place
-# is saved and used again the next time the window is set up or shown.
+# Movable windows: hold ALT and drag a client window with the left mouse button to move it.
+# The new place is saved and used again the next time the window is set up or shown.
 #
-# Python 2.4. Experimental: which part of a window takes the drag depends on the engine (a
-# click on a button or list goes to that child, not to the window).
+# Python 2.4. Experimental.
 #
-# How it works: every client/ui/*window module defines a script class whose Init(self) the
-# engine calls; self.window is that window's root widget. After Init, this module registers
-# mouse handlers on self.window (RegisterPythonMouseEvent, as the inventory does for item
-# drags) and moves it with SetAnchorOffset. Anchor offsets may be scaled or point the other
-# way (a window anchored to the right or bottom), so the first drag step measures how the
-# window's screen rectangle follows its offset and corrects for that.
+# How it works:
+# - Every client/ui/*window module defines a script class whose Init(self) the engine calls;
+#   self.window is that window's root widget. patch_module wraps Init (and Show) to record
+#   which widget belongs to which window and to put it back at its saved place.
+# - The game registers its own mouse handlers on the UI root window (client.gameui.Initialize):
+#   client.inputhandlers.HandleOtherMouseInputs for button down/up and HandleMouseMove for
+#   moves. The root window sees every click; event['ClickedWidget'] is the widget under the
+#   mouse. patch_inputhandlers wraps those two functions before gameui registers them. On
+#   ALT + left button down, the clicked widget's parents are searched for a recorded window;
+#   that window then follows the mouse (SetAnchorOffset) until the button goes up.
+# - Anchor offsets may be scaled or point the other way (a window anchored to the right or
+#   bottom), so the first drag measures how the window's screen rectangle follows its offset.
 
 import sys
-import types
 
 POSITIONS_FILE = 'client_mod_windows.txt'
 
 _log = None
 _positions = {}      # window key -> (x, y) anchor offset
 _scale = {}          # window key -> (sx, sy): offset units per screen pixel
-_drag = {}           # window key -> (mouse x, mouse y, offset x, offset y)
+_windows = []        # [(root widget, window key)] of every window that ran Init
+_drag = []           # [widget, key, mouse x, mouse y, offset x, offset y] while dragging
 _loaded = [False]
+_logged_event = [False]
+_misses = [0]
 
 
-def _mouse_pos():
-    import gameclient
-    pos = gameclient.GetUIManager().GetMousePos()
-    return float(pos[0]), float(pos[1])
+def _say(message):
+    if _log is not None:
+        _log('movable: ' + message)
 
 
 def _load_positions():
@@ -61,6 +67,51 @@ def _save_positions():
         f.close()
 
 
+# --- mouse --------------------------------------------------------------------------------
+
+def _mouse_pos(event):
+    try:
+        return float(event['LocX']), float(event['LocY'])
+    except:
+        import gameclient
+        pos = gameclient.GetUIManager().GetMousePos()
+        return float(pos[0]), float(pos[1])
+
+
+def _alt_down(event):
+    import uievent
+    alt = getattr(uievent, 'eModAlt', None)
+    try:
+        modifiers = event['Modifiers']
+    except:
+        return False
+    return alt is not None and alt in modifiers
+
+
+def _same(a, b):
+    if a is b:
+        return True
+    try:
+        return a == b
+    except:
+        return False
+
+
+def _find_window(widget):
+    # The clicked widget, or one of its parents, is the root widget of a recorded window.
+    depth = 0
+    while widget is not None and depth < 64:
+        for root, key in _windows:
+            if _same(root, widget):
+                return root, key
+        try:
+            widget = widget.GetParent()
+        except:
+            return None
+        depth += 1
+    return None
+
+
 def _measure_scale(key, widget, offset):
     # Move the window 10 offset units on each axis and see how far its rectangle goes.
     left, top, right, bottom = widget.GetScreenRect()
@@ -73,46 +124,99 @@ def _measure_scale(key, widget, offset):
     if top2 != top:
         sy = 10.0 / (top2 - top)
     _scale[key] = (sx, sy)
-    _log('movable: %s offset units per pixel %r, %r' % (key, sx, sy))
+    _say('%s offset units per pixel %r, %r' % (key, sx, sy))
 
 
-def _handlers(key):
-    def on_down(widget, event):
+def _log_event_once(event):
+    if _logged_event[0]:
+        return
+    _logged_event[0] = True
+    import uievent
+    names = [n for n in dir(uievent) if n.startswith('eMod')]
+    try:
+        keys = event.keys()
+    except:
+        keys = '?'
+    _say('first click: event keys %r, uievent modifiers %r, Modifiers %r'
+         % (keys, names, event.get('Modifiers')))
+
+
+def _start_drag(event):
+    found = _find_window(event.get('ClickedWidget'))
+    if found is None:
+        if _misses[0] < 5:
+            _misses[0] += 1
+            _say('ALT click on %r, which is not in a known window' % (event.get('ClickedWidget'),))
+        return False
+    widget, key = found
+    mx, my = _mouse_pos(event)
+    ox, oy = widget.GetAnchorOffset()
+    if key not in _scale:
+        _measure_scale(key, widget, (ox, oy))
+    _drag[:] = [widget, key, mx, my, ox, oy]
+    return True
+
+
+def _move_drag(event):
+    widget, key, mx0, my0, ox, oy = _drag
+    mx, my = _mouse_pos(event)
+    sx, sy = _scale.get(key, (1.0, 1.0))
+    widget.SetAnchorOffset(ox + (mx - mx0) * sx, oy + (my - my0) * sy)
+
+
+def _end_drag(event):
+    _move_drag(event)
+    widget, key = _drag[0], _drag[1]
+    del _drag[:]
+    x, y = widget.GetAnchorOffset()
+    _positions[key] = (x, y)
+    _save_positions()
+    _say('%s moved to %r, %r' % (key, x, y))
+
+
+def _wrap_button_handler(real):
+    def HandleOtherMouseInputs(widget, event):
         try:
-            mx, my = _mouse_pos()
-            ox, oy = widget.GetAnchorOffset()
-            if key not in _scale:
-                _measure_scale(key, widget, (ox, oy))
-            _drag[key] = (mx, my, ox, oy)
+            import uievent
+            _log_event_once(event)
+            # The game registers this one function for button down and button up, and the
+            # event does not say which: the first ALT click starts a drag, the next ends it.
+            if _drag:
+                _end_drag(event)
+                return uievent.eHandledStop
+            if _alt_down(event) and _start_drag(event):
+                return uievent.eHandledStop
         except:
-            _log('movable: %s mouse down failed: %s' % (key, sys.exc_info()[1]))
+            del _drag[:]
+            _say('mouse button hook failed: %s' % (sys.exc_info()[1],))
+        return real(widget, event)
+    return HandleOtherMouseInputs
 
-    def on_drag(widget, event):
-        try:
-            start = _drag.get(key)
-            if start is None:
-                return
-            mx, my = _mouse_pos()
-            sx, sy = _scale.get(key, (1.0, 1.0))
-            x = start[2] + (mx - start[0]) * sx
-            y = start[3] + (my - start[1]) * sy
-            widget.SetAnchorOffset(x, y)
-        except:
-            _log('movable: %s drag failed: %s' % (key, sys.exc_info()[1]))
 
-    def on_up(widget, event):
-        try:
-            if _drag.pop(key, None) is None:
-                return
-            x, y = widget.GetAnchorOffset()
-            _positions[key] = (x, y)
-            _save_positions()
-            _log('movable: %s moved to %r, %r' % (key, x, y))
-        except:
-            _log('movable: %s mouse up failed: %s' % (key, sys.exc_info()[1]))
+def _wrap_move_handler(real):
+    def HandleMouseMove(widget, event):
+        if _drag:
+            try:
+                import uievent
+                _move_drag(event)
+                return uievent.eHandledStop
+            except:
+                del _drag[:]
+                _say('mouse move hook failed: %s' % (sys.exc_info()[1],))
+        return real(widget, event)
+    return HandleMouseMove
 
-    return on_down, on_drag, on_up
 
+def patch_inputhandlers(module, log):
+    """Wrap the game's root-window mouse handlers; call before client.gameui.Initialize."""
+    global _log
+    _log = log
+    module.HandleOtherMouseInputs = _wrap_button_handler(module.HandleOtherMouseInputs)
+    module.HandleMouseMove = _wrap_move_handler(module.HandleMouseMove)
+    _say('ALT + left drag hooked on the root window handlers')
+
+
+# --- windows ------------------------------------------------------------------------------
 
 def _restore(key, script):
     widget = getattr(script, 'window', None)
@@ -121,19 +225,19 @@ def _restore(key, script):
         widget.SetAnchorOffset(x, y)
 
 
-def _attach(key, script):
+def _record(key, script):
     widget = getattr(script, 'window', None)
     if widget is None:
-        _log('movable: %s has no window widget, skipped' % key)
+        _say('%s has no window widget, skipped' % key)
         return
-    import uievent
-    mouse = uievent.mouse
-    on_down, on_drag, on_up = _handlers(key)
-    widget.RegisterPythonMouseEvent(mouse.eButton1, mouse.eMouseDown, on_down)
-    widget.RegisterPythonMouseEvent(mouse.eButton1, mouse.eMouseDrag, on_drag)
-    widget.RegisterPythonMouseEvent(mouse.eButton1, mouse.eMouseUp, on_up)
+    for i in range(len(_windows)):
+        if _windows[i][1] == key:
+            _windows[i] = (widget, key)
+            break
+    else:
+        _windows.append((widget, key))
     _restore(key, script)
-    _log('movable: %s ready' % key)
+    _say('%s ready' % key)
 
 
 def _wrap(cls, method_name, key, after):
@@ -146,7 +250,7 @@ def _wrap(cls, method_name, key, after):
         try:
             after(key, self)
         except:
-            _log('movable: %s after %s failed: %s' % (key, method_name, sys.exc_info()[1]))
+            _say('%s after %s failed: %s' % (key, method_name, sys.exc_info()[1]))
         return result
 
     wrapper.__name__ = method_name
@@ -155,20 +259,20 @@ def _wrap(cls, method_name, key, after):
 
 
 def patch_module(name, module, log, excluded):
-    """Make the window classes of one client.ui.*window module movable."""
+    """Record and restore the windows of one client.ui.*window module (fully loaded)."""
     global _log
     _log = log
     _load_positions()
     short = name.split('.')[-1]
     if short in excluded:
-        log('movable: %s excluded' % short)
+        _say('%s excluded' % short)
         return
     for attr, cls in module.__dict__.items():
-        if not isinstance(cls, (type, types.ClassType)) or getattr(cls, '__module__', None) != module.__name__:
+        if not hasattr(cls, '__bases__') or getattr(cls, '__module__', None) != module.__name__:
             continue
         if 'Init' not in cls.__dict__:
             continue
         key = '%s.%s' % (short, attr)
-        _wrap(cls, 'Init', key, _attach)
+        _wrap(cls, 'Init', key, _record)
         _wrap(cls, 'Show', key, _restore)
-        log('movable: patched %s' % key)
+        _say('patched %s' % key)
