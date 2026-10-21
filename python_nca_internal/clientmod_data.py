@@ -65,8 +65,8 @@ MISSIONS = {
     },
 }
 
-# Movable windows (clientmod_movable.py): drag a window with the right mouse button or
-# with Ctrl + left mouse button (the client never sees ALT on a mouse click).
+# Movable windows (clientmod_movable.py): drag a window with Ctrl + left mouse button
+# (the client never sees ALT on a mouse click).
 # Positions are saved in client_mod_windows.txt in the game folder; delete it to reset.
 MOVABLE_WINDOWS = True
 # client/ui modules whose windows stay where the game puts them.

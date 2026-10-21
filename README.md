@@ -15,15 +15,13 @@ Status: **experimental.** Tested in the client on 2026-10-20:
 
 ## Movable windows
 
-Drag any window to a new place:
-
-- **right mouse button**: hold it on the window and move the mouse. A right click
-  without movement still reaches the game, so context menus keep working;
-- **Ctrl + left mouse button**: the same, for one-button use.
+Drag any window to a new place with **Ctrl + left mouse button**: hold Ctrl, push the left
+button on the window and move the mouse.
 
 The click may land anywhere in the window, also on its title or on a button. ALT does
 not work: the client never sees ALT on a mouse click (the event's `Modifiers` list holds
-Ctrl and Shift only). The middle button is left alone, it zooms.
+Ctrl and Shift only). The right and middle buttons are left alone: a right drag did not
+always let go of the window, and the middle button zooms.
 
 Each window's place is saved in `client_mod_windows.txt` in the game folder and used
 again when the window opens or the game starts. Delete the file to put all windows back

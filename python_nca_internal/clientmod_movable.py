@@ -1,5 +1,4 @@
-# Movable windows: drag a client window with the right mouse button, or with Ctrl + left
-# mouse button, to move it.
+# Movable windows: drag a client window with Ctrl + left mouse button to move it.
 # The new place is saved and used again the next time the window is set up or shown.
 #
 # Python 2.4. Experimental.
@@ -12,10 +11,9 @@
 #   client.inputhandlers.HandleOtherMouseInputs for button down/up and HandleMouseMove for
 #   moves. The root window sees every click; event['ClickedWidget'] is the widget under the
 #   mouse. patch_inputhandlers wraps those two functions before gameui registers them.
-#   When the right button is down and the mouse moves 4 pixels (or on Ctrl + left button
-#   down), the clicked widget's parents are searched for a recorded window; that window then
-#   follows the mouse (SetAnchorOffset) until the button goes up. A right click without
-#   movement still reaches the game (context menus).
+#   On Ctrl + left button down, the clicked widget's parents are searched for a recorded
+#   window; that window then follows the mouse (SetAnchorOffset) until the button goes up.
+#   (Right drag was removed: the window did not always let go when the right button went up.)
 # - Anchor offsets may be scaled or point the other way (a window anchored to the right or
 #   bottom), so the first drag measures how the window's screen rectangle follows its offset.
 
@@ -131,19 +129,25 @@ def _measure_scale(key, widget, offset):
     _say('%s offset units per pixel %r, %r' % (key, sx, sy))
 
 
-def _start_drag(clicked, mx, my):
+def _window_under(clicked):
+    # Call this only while the game handles the click. A widget object kept until a later
+    # event may belong to a destroyed widget: the old right drag from an inventory item
+    # probably called GetParent on it later, and the game crashed in Py_FindMethodInChain
+    # (2026-10-21 dumps).
     found = _find_window(clicked)
     if found is None:
         if _misses[0] < 5:
             _misses[0] += 1
             _say('drag click on %r, which is not in a known window' % (clicked,))
-        return False
+    return found
+
+
+def _start_drag(found, mx, my):
     widget, key = found
     ox, oy = widget.GetAnchorOffset()
     if key not in _scale:
         _measure_scale(key, widget, (ox, oy))
     _drag[:] = [widget, key, mx, my, ox, oy]
-    return True
 
 
 def _move_drag(event):
@@ -183,10 +187,6 @@ def _debug_event(what, event):
 PHASE_DOWN = 1
 PHASE_UP = 2
 LEFT = 1
-RIGHT = 2
-DRAG_START_PIXELS = 4
-
-_right = []          # [clicked widget, mouse x, mouse y] while the right button is down
 
 
 def _wrap_button_handler(real):
@@ -197,7 +197,6 @@ def _wrap_button_handler(real):
             phase = event.get('Phase')
             button = event.get('ButtonID')
             if phase == PHASE_UP:
-                del _right[:]
                 if _drag:
                     _end_drag(event)
                     # The game still sees the button go up, so its own state stays right.
@@ -205,16 +204,13 @@ def _wrap_button_handler(real):
                     return uievent.eHandledStop
             elif phase == PHASE_DOWN and not _drag:
                 if button == LEFT and _modifier_down(event):
-                    mx, my = _mouse_pos(event)
-                    if _start_drag(event.get('ClickedWidget'), mx, my):
+                    found = _window_under(event.get('ClickedWidget'))
+                    if found is not None:
+                        mx, my = _mouse_pos(event)
+                        _start_drag(found, mx, my)
                         return uievent.eHandledStop
-                elif button == RIGHT:
-                    # A right click stays a right click; the drag starts once the mouse moves.
-                    mx, my = _mouse_pos(event)
-                    _right[:] = [event.get('ClickedWidget'), mx, my]
         except:
             del _drag[:]
-            del _right[:]
             _say('mouse button hook failed: %s' % (sys.exc_info()[1],))
         return real(widget, event)
     return HandleOtherMouseInputs
@@ -223,19 +219,12 @@ def _wrap_button_handler(real):
 def _wrap_move_handler(real):
     def HandleMouseMove(widget, event):
         try:
-            if _right and not _drag:
-                clicked, x0, y0 = _right
-                mx, my = _mouse_pos(event)
-                if abs(mx - x0) + abs(my - y0) >= DRAG_START_PIXELS:
-                    del _right[:]
-                    _start_drag(clicked, x0, y0)
             if _drag:
                 import uievent
                 _move_drag(event)
                 return uievent.eHandledStop
         except:
             del _drag[:]
-            del _right[:]
             _say('mouse move hook failed: %s' % (sys.exc_info()[1],))
         return real(widget, event)
     return HandleMouseMove
@@ -247,7 +236,7 @@ def patch_inputhandlers(module, log):
     _log = log
     module.HandleOtherMouseInputs = _wrap_button_handler(module.HandleOtherMouseInputs)
     module.HandleMouseMove = _wrap_move_handler(module.HandleMouseMove)
-    _say('right drag and Ctrl + left drag hooked on the root window handlers')
+    _say('Ctrl + left drag hooked on the root window handlers')
 
 
 # --- windows ------------------------------------------------------------------------------
