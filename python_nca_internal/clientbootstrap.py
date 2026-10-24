@@ -20,7 +20,7 @@ LOG_NAME = 'client_mod.log'
 
 # Modules whose first import is logged: the mission tables and the language manager.
 WATCH_WORDS = ('mission', 'objectiveconversation', 'clientlanguagemanager', 'client.ui.',
-               'client.inputhandlers')
+               'client.inputhandlers', 'client.gameui')
 
 
 def _log(message):
@@ -120,7 +120,7 @@ def _apply_missions(table, module):
 
 
 def _on_module_loaded(name, module):
-    if name.startswith('client.ui.') or name == 'client.inputhandlers':
+    if name.startswith('client.ui.') or name in ('client.inputhandlers', 'client.gameui'):
         # The module is in sys.modules before its code has run; wait until it has.
         _pending.append((name, module))
         return
@@ -135,6 +135,13 @@ def _on_module_loaded(name, module):
 
 def _on_ui_module_loaded(name, module):
     import clientmod_data
+    if getattr(clientmod_data, 'QUEST_HELPER', False):
+        if name == 'client.gameui':
+            import clientmod_quest_helper
+            clientmod_quest_helper.attach_gameui(module, _log)
+        elif name == 'client.ui.conversationwindow':
+            import clientmod_quest_helper
+            clientmod_quest_helper.attach_conversationwindow(module, _log)
     if not getattr(clientmod_data, 'MOVABLE_WINDOWS', False):
         return
     import clientmod_movable

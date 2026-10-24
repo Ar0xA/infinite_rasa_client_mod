@@ -82,3 +82,10 @@ MOVABLE_EXCLUDED = (
 NATIVE_MODULES = (
     # 'clientmod_native',
 )
+
+# GM quest helper (clientmod_quest_helper.py): runs commands from quest_helper_cmd.txt in the
+# game folder (walk, use, talk, chat and GM commands) and writes quest_helper_state.txt.
+# Experimental; for testing quests on a GM account.
+QUEST_HELPER = True
+# Send "gm on" (.invisible on, .immune all) each time a character enters the world.
+QUEST_HELPER_GM_MODE = True

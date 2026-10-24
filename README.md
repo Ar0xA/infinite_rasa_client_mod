@@ -41,6 +41,53 @@ runs inside the game. `native/clientmod_native.c` is a small example: it writes 
 off by default (`NATIVE_MODULES` in `clientmod_data.py`) and not in git as a binary; build
 it with `native/build.sh`. Details: [native_modules.md](native_modules.md).
 
+## GM quest helper
+
+Experimental, for testing quests faster. `clientmod_quest_helper.py` reads commands from
+`quest_helper_cmd.txt` in the game folder a few times a second, deletes the file and runs
+the commands. It writes what it sees (position, target, open conversation and its choices,
+the last results) to `quest_helper_state.txt` every second. Each result is also logged in
+`client_mod.log` as `quest: …`.
+
+```sh
+tools/quest_helper.sh "/path/to/Tabula Rasa 1.16.5.0" send "gm on" "say .teleport -283 422 848 1497"
+tools/quest_helper.sh "/path/to/Tabula Rasa 1.16.5.0" state
+```
+
+**Account level 10 only.** The client is not told the account level (`SetIsGM` is only a
+yes or no). So when a character enters the world, the helper sends `.flag list` (read-only,
+needs level 10) and reads the server's answer in chat. Until the answer comes, commands
+wait. If the answer shows a lower level, or no answer comes within 10 s, the helper stays
+off for that character and ignores commands. This is a convenience, not security: the
+server checks the level of every GM command anyway.
+
+Commands, one per line (entity ids are the server's decimal ids):
+
+| Command | What it does |
+|---|---|
+| `say <text>` | Sends the text as if typed in chat, also GM commands (`.teleport …`) and slash commands |
+| `gm on` / `gm off` | GM test mode: `.invisible on` and `.immune all`, or both off |
+| `invisible on\|off`, `immune <args>` | One of the two (`.immune` acts on yourself: the target is cleared first) |
+| `target <id>`, `untarget` | Sets or clears the target |
+| `goto <x> <y> <z> [range]` | Walks to a position (y is up) |
+| `walkto <id> [range]` | Walks to an entity |
+| `use [id]` | Uses an entity (default: the target), walking to it first if needed |
+| `stop` | Stops walking |
+| `accept`, `decline`, `complete`, `reward` | The open conversation's buttons |
+| `choice <n>` | Picks choice n of the open conversation, as numbered in the state file |
+| `wait <ms>` | Waits before the next command |
+
+With `QUEST_HELPER_GM_MODE = True` in `clientmod_data.py`, `gm on` is sent by itself once
+the account level is confirmed, each time a character enters the world: the server turns
+`.invisible` off at every login, and an immunity lasts only until logout. Send `gm off` for
+a test that needs the character to be seen or hurt. `QUEST_HELPER = False` turns the
+helper off.
+
+The helper calls the client's own functions: `gameui.RegisterForUpdate` for the periodic
+update, `communicator.OnProcessChat` for chat, `UI_DISPLAY_CHAT_MESSAGE` to read the
+server's answers, the movement manager's `TrackMoveToPosition` / `TrackEntityMoveNextTo`
+(click-to-move) and the conversation window's button handlers.
+
 ## How it works
 
 The client runs its game logic on an embedded Python 2.4 (`python24.dll`). At
