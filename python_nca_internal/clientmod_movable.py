@@ -1,4 +1,4 @@
-# Movable windows: drag a client window with Ctrl + left mouse button to move it.
+# Movable windows: drag a client window with Shift + middle mouse button (wheel click) to move it.
 # The new place is saved and used again the next time the window is set up or shown.
 #
 # Python 2.4. Experimental.
@@ -11,7 +11,7 @@
 #   client.inputhandlers.HandleOtherMouseInputs for button down/up and HandleMouseMove for
 #   moves. The root window sees every click; event['ClickedWidget'] is the widget under the
 #   mouse. patch_inputhandlers wraps those two functions before gameui registers them.
-#   On Ctrl + left button down, the clicked widget's parents are searched for a recorded
+#   On Shift + middle button down, the clicked widget's parents are searched for a recorded
 #   window; that window then follows the mouse (SetAnchorOffset) until the button goes up.
 #   (Right drag was removed: the window did not always let go when the right button went up.)
 # - Anchor offsets may be scaled or point the other way (a window anchored to the right or
@@ -83,7 +83,7 @@ def _modifier_down(event):
     # uievent.eModAlt never appears in event['Modifiers'] (checked in game, 2026-10-20).
     import uievent
     try:
-        return uievent.eModControl in event['Modifiers']
+        return uievent.eModShift in event['Modifiers']
     except:
         return False
 
@@ -182,11 +182,14 @@ def _debug_event(what, event):
         pass
 
 
-# event['Phase']: 1 button down, 2 button up, 0 mouse move; event['ButtonID']: 1 left
-# (seen in game, 2026-10-20).
+# event['Phase']: 1 button down, 2 button up, 0 mouse move; event['ButtonID']: 1 left,
+# 2 right, 64 wheel turn (seen in game, 2026-10-20). DownButtons is a bit mask of the
+# same values, so the middle button (wheel click) is probably 4: not yet seen in game.
 PHASE_DOWN = 1
 PHASE_UP = 2
-LEFT = 1
+DRAG_BUTTON = 4
+_other_left = [5]    # Shift clicks with another button still to log
+_odd_left = [40]     # events from buttons other than left and right still to log
 
 
 def _wrap_button_handler(real):
@@ -203,12 +206,21 @@ def _wrap_button_handler(real):
                     real(widget, event)
                     return uievent.eHandledStop
             elif phase == PHASE_DOWN and not _drag:
-                if button == LEFT and _modifier_down(event):
-                    found = _window_under(event.get('ClickedWidget'))
-                    if found is not None:
-                        mx, my = _mouse_pos(event)
-                        _start_drag(found, mx, my)
-                        return uievent.eHandledStop
+                if _modifier_down(event):
+                    if button == DRAG_BUTTON:
+                        found = _window_under(event.get('ClickedWidget'))
+                        if found is not None:
+                            mx, my = _mouse_pos(event)
+                            _start_drag(found, mx, my)
+                            return uievent.eHandledStop
+                    elif _other_left[0] > 0:
+                        _other_left[0] -= 1
+                        _say('Shift click with ButtonID %r, not the drag button %r'
+                             % (button, DRAG_BUTTON))
+            if button not in (1, 2) and _odd_left[0] > 0:
+                _odd_left[0] -= 1
+                _say('odd button Phase=%r ButtonID=%r DownButtons=%r Modifiers=%r'
+                     % (phase, button, event.get('DownButtons'), event.get('Modifiers')))
         except:
             del _drag[:]
             _say('mouse button hook failed: %s' % (sys.exc_info()[1],))
@@ -236,7 +248,15 @@ def patch_inputhandlers(module, log):
     _log = log
     module.HandleOtherMouseInputs = _wrap_button_handler(module.HandleOtherMouseInputs)
     module.HandleMouseMove = _wrap_move_handler(module.HandleMouseMove)
-    _say('Ctrl + left drag hooked on the root window handlers')
+    _say('Shift + middle drag hooked on the root window handlers')
+    try:
+        import uievent
+        names = [n for n in dir(uievent) if n.startswith('eButton') or n.startswith('eWheel')
+                 or n.startswith('eMod')]
+        _say('uievent constants: %s'
+             % ', '.join(['%s=%r' % (n, getattr(uievent, n)) for n in names]))
+    except:
+        _say('uievent constants not read: %s' % (sys.exc_info()[1],))
 
 
 # --- windows ------------------------------------------------------------------------------

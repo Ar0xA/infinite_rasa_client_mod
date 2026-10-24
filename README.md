@@ -15,19 +15,21 @@ Status: **experimental.** Tested in the client on 2026-10-20:
 
 ## Movable windows
 
-Drag any window to a new place with **Ctrl + left mouse button**: hold Ctrl, push the left
-button on the window and move the mouse.
+**Off by default** (`MOVABLE_WINDOWS = False`). The code drags a window with **Shift +
+middle mouse button** (push the wheel), but this does not work yet: in a test on
+2026-10-24, wheel clicks never reached the root window handler (no event, with or without
+Shift). The drag button is `DRAG_BUTTON` in `clientmod_movable.py`. A combination with
+the left button (for example Ctrl + Shift + left) does reach the handler.
 
 The click may land anywhere in the window, also on its title or on a button. ALT does
 not work: the client never sees ALT on a mouse click (the event's `Modifiers` list holds
-Ctrl and Shift only). The right and middle buttons are left alone: a right drag did not
-always let go of the window, and the middle button zooms.
+Ctrl and Shift only; `uievent`: eModShift=1, eModAlt=2, eModControl=4).
 
 Each window's place is saved in `client_mod_windows.txt` in the game folder and used
 again when the window opens or the game starts. Delete the file to put all windows back
 at their default places. In `python_nca_internal/clientmod_data.py`:
 
-- `MOVABLE_WINDOWS = False` turns the feature off;
+- `MOVABLE_WINDOWS = True` turns the feature on;
 - `MOVABLE_EXCLUDED` lists `client/ui` modules whose windows never move (the reticle
   and the character creation screen by default).
 
