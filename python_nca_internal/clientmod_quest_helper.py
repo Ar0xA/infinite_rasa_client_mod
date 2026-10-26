@@ -1053,11 +1053,41 @@ def _listen():
         _say('listening to chat')
 
 
+# A map movie of the loading screen (an instance's) that plays this long is stopped.
+MOVIE_STOP_MS = 3000
+_movie_ms = [0]
+_movie_scan_ms = [0]
+
+
+def _stop_stuck_movie(msec):
+    # The loading screen plays the map's movie before it enters the world (wonkavatorwindow.PlayMovie,
+    # entered on HandleMovieEnded). Under Wine that movie never ends, so the client never says the load
+    # is done and the server drops it after 60 s ("Transfer timed out"). Stop it as Escape would.
+    _movie_scan_ms[0] += msec
+    if _movie_scan_ms[0] < 1000:
+        return
+    msec, _movie_scan_ms[0] = _movie_scan_ms[0], 0
+    module = sys.modules.get('client.ui.wonkavatorwindow')
+    if module is None:
+        return
+    import gc
+    for o in gc.get_objects():
+        if getattr(o, '__class__', None) is module.wonkavatorwindow and getattr(o, '_wonkavatorwindow__moviePlaying', False):
+            _movie_ms[0] += msec
+            if _movie_ms[0] >= MOVIE_STOP_MS:
+                _movie_ms[0] = 0
+                o.OnCancelMovie(None, None)
+                _say('loading screen: stopped the map movie after %d ms (it does not end under Wine)' % MOVIE_STOP_MS)
+            return
+    _movie_ms[0] = 0
+
+
 def _update(msec):
     try:
         _since_poll[0] += msec
         _since_state[0] += msec
         if _since_poll[0] >= POLL_MS:
+            _stop_stuck_movie(_since_poll[0])
             _since_poll[0] = 0
             _listen()
             _check_new_character()
