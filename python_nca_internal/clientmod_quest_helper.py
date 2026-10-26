@@ -45,8 +45,13 @@
 #   tele <entityId>         ".tele" to the entity's position, without a map load (out of a stuck spot)
 #   reload                  load this file again, without a game restart
 #   camera <degrees>        turn the camera to that yaw (0 = +z), as the turn keys do
-#   look <entityId>         turn the camera from the player towards the entity
+#   look <entityId> [deg]   turn the camera from the player towards the entity (plus deg, to see past the player)
 #   py <expression>         evaluate a Python expression in the client and log its value (test aid)
+#   hide <entityId>         make only that entity invisible here (opacity 0, scale 0.001); unhide undoes it
+#   probe <entityId>        log what the client knows about drawing it: culled, loading, opacity, size
+#   dismiss                 close every open message box (server error dialogs) without input
+#   zoom on|off             the zoom camera (about 2 m behind the shoulder) or the normal one
+#   ui off|on               the client's screenshot mode (no windows or HUD), or the normal view
 #   killname <text> [slot] [seconds]
 #                           kill the nearest living entity within 80 m whose name has <text>
 #
@@ -107,6 +112,10 @@ LOOK_TOLERANCE = math.radians(4)
 _kill = [None]
 # A camera turn in progress: {'yaw', 'dir' (-1 left, 1 right), 'until'}.
 _look = [None]
+# Entities taken out of the world by 'hide'.
+_hidden = {}
+# True while 'ui off' holds the windows hidden.
+_ui_hidden = [False]
 
 
 def _say(message):
@@ -656,10 +665,29 @@ def _yaw_diff(target, current):
     return d
 
 
-def _start_turn(yaw, what):
-    # Turn the camera as the turn keys do (UserController.TurnLeft/TurnRight), stopped in _look_step.
-    _look[0] = {'yaw': yaw, 'dir': 0, 'until': time.time() + 10.0, 'what': what}
+def _camera_pitch():
+    return _gameclient().GetGameUIManager().GetDisplayWorld().GetCameraDir()[1]
+
+
+def _start_turn(yaw, what, target=None):
+    # Turn the camera as the turn keys do (UserController.TurnLeft/TurnRight), then, with a target
+    # position, tilt it (LookUp/LookDown) towards it; both stopped in _look_step.
+    _look[0] = {'yaw': yaw, 'dir': 0, 'until': time.time() + 10.0, 'what': what, 'phase': 'yaw', 'target': target}
     return 'turning to %.1f degrees (%s)' % (math.degrees(yaw), what)
+
+
+def _stop_keys(look, controller):
+    if look['phase'] == 'yaw':
+        if look['dir'] > 0:
+            controller.TurnRight(False)
+        elif look['dir'] < 0:
+            controller.TurnLeft(False)
+    else:
+        if look['dir'] > 0:
+            controller.LookDown(False)
+        elif look['dir'] < 0:
+            controller.LookUp(False)
+    look['dir'] = 0
 
 
 def _look_step():
@@ -668,27 +696,45 @@ def _look_step():
     if look is None:
         return False
     controller = _gameclient().GetUserController()
-    d = _yaw_diff(look['yaw'], _camera_yaw())
+    if look['phase'] == 'yaw':
+        if look['target'] is not None:
+            # Aim from the camera, not from the player: the camera stands behind or beside the player and
+            # moves while it turns, so a near entity needs the angle measured again at each step.
+            camera = controller.GetCameraPosition()
+            there = look['target']
+            look['yaw'] = math.atan2(there[0] - camera[0], there[2] - camera[2]) + look.get('offset', 0.0)
+        d = _yaw_diff(look['yaw'], _camera_yaw())
+    else:
+        d = look['pitch'] - _camera_pitch()
     if abs(d) < LOOK_TOLERANCE or time.time() > look['until']:
-        if look['dir'] > 0:
-            controller.TurnRight(False)
-        elif look['dir'] < 0:
-            controller.TurnLeft(False)
+        _stop_keys(look, controller)
+        if look['phase'] == 'yaw' and look['target'] is not None:
+            camera = controller.GetCameraPosition()
+            there = look['target']
+            flat = math.sqrt((there[0] - camera[0]) ** 2 + (there[2] - camera[2]) ** 2)
+            # The client's pitch grows downwards (LookDown makes it bigger).
+            look['pitch'] = math.atan2(camera[1] - there[1], max(flat, 0.1))
+            look['phase'] = 'pitch'
+            look['until'] = time.time() + 6.0
+            return True
         _look[0] = None
-        _say('look: %s, off by %.1f degrees' % (look['what'], math.degrees(d)))
+        _say('look: %s, off by %.1f degrees (%s)' % (look['what'], math.degrees(d), look['phase']))
         return False
     want = 1
     if d < 0:
         want = -1
     if want != look['dir']:
-        if look['dir'] > 0:
-            controller.TurnRight(False)
-        elif look['dir'] < 0:
-            controller.TurnLeft(False)
-        if want > 0:
-            controller.TurnRight(True)
+        _stop_keys(look, controller)
+        if look['phase'] == 'yaw':
+            if want > 0:
+                controller.TurnRight(True)
+            else:
+                controller.TurnLeft(True)
         else:
-            controller.TurnLeft(True)
+            if want > 0:
+                controller.LookDown(True)
+            else:
+                controller.LookUp(True)
         look['dir'] = want
     return True
 
@@ -698,15 +744,114 @@ def _cmd_camera(args):
 
 
 def _cmd_look(args):
-    # look <entityId>: turn the camera from the player towards the entity.
-    entity = _entity(long(args.split()[0]))
+    # look <entityId> [offset degrees]: turn the camera from the player towards the entity; an offset
+    # turns it that much further, so the player's own body is not between the camera and the entity.
+    parts = args.split()
+    entity = _entity(long(parts[0]))
+    offset = 0.0
+    if len(parts) > 1:
+        offset = math.radians(float(parts[1]))
     there = _position(entity)
     here = _position(_player())
     if there is None or here is None:
         return 'look %s: not here' % (args,)
-    yaw = math.atan2(there[0] - here[0], there[2] - here[2])
-    return _start_turn(yaw, '%s (%s), %.1f m' % (args, _name(entity),
-                       math.sqrt((there[0] - here[0]) ** 2 + (there[2] - here[2]) ** 2)))
+    yaw = math.atan2(there[0] - here[0], there[2] - here[2]) + offset
+    answer = _start_turn(yaw, '%s (%s), %.1f m' % (args, _name(entity),
+                         math.sqrt((there[0] - here[0]) ** 2 + (there[2] - here[2]) ** 2)), there)
+    _look[0]['offset'] = offset
+    return answer
+
+
+def _cmd_frame(args):
+    # frame <entityId> [metres]: teleport the player that far from the entity (default 6 m), on the line
+    # from the entity to where the player stands now, so a following "look" sees it from a set distance.
+    parts = args.split()
+    entity = _entity(long(parts[0]))
+    distance = 6.0
+    if len(parts) > 1:
+        distance = float(parts[1])
+    there = _position(entity)
+    here = _position(_player())
+    if there is None or here is None:
+        return 'frame %s: not here' % (args,)
+    dx = here[0] - there[0]
+    dz = here[2] - there[2]
+    flat = math.sqrt(dx * dx + dz * dz)
+    if flat < 0.1:
+        dx, dz, flat = 1.0, 0.0, 1.0
+    x = there[0] + dx / flat * distance
+    z = there[2] + dz / flat * distance
+    _chat('.tele %.1f %.1f %.1f' % (x, there[1] + 1.0, z))
+    return 'frame %s (%s): player to %.1f %.1f %.1f, %.1f m from it' % (parts[0], _name(entity), x, there[1] + 1.0, z, distance)
+
+
+def _cmd_hide(args):
+    # hide <entityId>: take only this entity out of this client's world, for a before/after picture.
+    # Opacity and scale do not hide every object (a mission item on the ground stays): removal does.
+    entity = _entity(long(args))
+    if entity is None:
+        return 'hide %s: not here' % (args,)
+    _hidden[long(args)] = True
+    entity.body.RemoveFromWorld()
+    return 'hidden %s (%s)' % (args, _name(entity))
+
+
+def _cmd_unhide(args):
+    # Puts the entity back the way the client adds it (client.world.AddToWorld: body.AddToWorld(entity.flags)).
+    entity = _entity(long(args))
+    _hidden.pop(long(args), None)
+    if entity is None:
+        return 'unhide %s: not here' % (args,)
+    import client.world
+    client.world.AddToWorld(entity)
+    return 'shown %s (%s), in world %s' % (args, _name(entity), entity.body.IsInWorld())
+
+
+def _cmd_probe(args):
+    # probe <entityId>: what the client knows about drawing it.
+    entity = _entity(long(args))
+    if entity is None:
+        return 'probe %s: not in the client' % (args,)
+    body = entity.body
+    here = _position(_player())
+    there = _position(entity)
+    distance = -1.0
+    if here is not None and there is not None:
+        distance = math.sqrt(sum([(there[i] - here[i]) ** 2 for i in range(3)]))
+    return 'probe %s (%s): culled %s, loading %s, opacity %s, in world %s, radius %.2f, extents %s, at %s, %.1f m' % (
+        args, _name(entity), body.IsCulled(), body.IsLoading(), body.GetOpacity(), body.IsInWorld(),
+        body.GetBoundingRadius(), body.GetExtents(), there, distance)
+
+
+def _cmd_dismiss(args):
+    # dismiss: close every open message box (e.g. "Server Map Initialization Errors!") without input.
+    import client.gameui
+    ids = list(getattr(client.gameui, 'g_messageBoxIds', []) or [])
+    for box in ids:
+        try:
+            client.gameui.DestroyMessageBox(box)
+        except:
+            _say('dismiss %s failed: %s' % (box, sys.exc_info()[1]))
+    return 'closed %d message box(es): %s' % (len(ids), ids)
+
+
+def _cmd_ui(args):
+    # ui off|on: the client's screenshot mode (the ToggleUI key, GameUIManager.ToggleScreenshotMode):
+    # no windows, HUD or tutorials in the picture; on undoes it.
+    want = args.strip().lower() != 'off'
+    if want == _ui_hidden[0]:
+        _gameclient().GetGameUIManager().ToggleScreenshotMode()
+        _ui_hidden[0] = not want
+    return 'ui %s' % (want and 'on' or 'off',)
+
+
+def _cmd_zoom(args):
+    # zoom on|off: the client's zoom camera (about 2 m behind the shoulder) or the normal one (about 15 m).
+    controller = _gameclient().GetUserController()
+    want = args.strip().lower() != 'off'
+    if bool(controller.IsCameraZoomed()) != want:
+        controller.ToggleCameraZoom()
+    return 'zoom %s' % (want and 'on' or 'off',)
 
 
 def _cmd_py(args):
@@ -746,6 +891,8 @@ COMMANDS = {
     'ability': _cmd_ability, 'loot': _cmd_loot, 'kill': _cmd_kill, 'killname': _cmd_killname,
     'tele': _cmd_tele, 'reload': _cmd_reload, 'pick': _cmd_pick, 'turnin': _cmd_turnin,
     'camera': _cmd_camera, 'look': _cmd_look, 'py': _cmd_py,
+    'hide': _cmd_hide, 'unhide': _cmd_unhide, 'probe': _cmd_probe, 'dismiss': _cmd_dismiss,
+    'zoom': _cmd_zoom, 'ui': _cmd_ui, 'frame': _cmd_frame,
 }
 
 
@@ -825,6 +972,11 @@ def _write_state():
     # idle: nothing queued, no wait, kill or camera turn going on (an outside program waits for this).
     idle = not _queue and _kill[0] is None and _look[0] is None and time.time() >= _wait_until[0]
     lines.append('idle %d' % (int(idle),))
+    try:
+        import client.gameui
+        lines.append('dialogs %s' % (list(getattr(client.gameui, 'g_messageBoxIds', []) or []),))
+    except:
+        pass
     lines.append('results:')
     lines.extend(_results)
     try:
