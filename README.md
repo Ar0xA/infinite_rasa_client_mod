@@ -67,6 +67,8 @@ Commands, one per line (entity ids are the server's decimal ids):
 
 | Command | What it does |
 |---|---|
+| `look <entityId>` / `camera <degrees>` | Turns the camera towards the entity, or to a yaw (0 = +z), with the client's turn keys (`UserController.TurnLeft/TurnRight`) |
+| `py <expression>` | Evaluates a Python expression in the client and logs the value (a test aid) |
 | `say <text>` | Sends the text as if typed in chat, also GM commands (`.teleport …`) and slash commands |
 | `gm on` / `gm off` | GM test mode: `.invisible on` and `.immune all`, or both off |
 | `invisible on\|off`, `immune <args>` | One of the two (`.immune` acts on yourself: the target is cleared first) |

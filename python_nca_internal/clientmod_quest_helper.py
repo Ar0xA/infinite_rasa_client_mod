@@ -44,6 +44,9 @@
 #                           then loot it. The next command waits for this to end.
 #   tele <entityId>         ".tele" to the entity's position, without a map load (out of a stuck spot)
 #   reload                  load this file again, without a game restart
+#   camera <degrees>        turn the camera to that yaw (0 = +z), as the turn keys do
+#   look <entityId>         turn the camera from the player towards the entity
+#   py <expression>         evaluate a Python expression in the client and log its value (test aid)
 #   killname <text> [slot] [seconds]
 #                           kill the nearest living entity within 80 m whose name has <text>
 #
@@ -63,6 +66,7 @@
 
 import os
 import sys
+import math
 import time
 
 CMD_FILE = 'quest_helper_cmd.txt'
@@ -97,8 +101,12 @@ WORLD_SETTLE_S = 3.0    # how long the character must be back before the next co
 WORLD_TIMEOUT_S = 90.0
 KILL_RANGE = 15.0
 KILL_INTERVAL_MS = 1500
+# A camera turn stops within this many radians of the wanted yaw.
+LOOK_TOLERANCE = math.radians(4)
 # kill: None, or {'id', 'slot', 'until', 'next', 'walking'}
 _kill = [None]
+# A camera turn in progress: {'yaw', 'dir' (-1 left, 1 right), 'until'}.
+_look = [None]
 
 
 def _say(message):
@@ -621,6 +629,92 @@ def _cmd_tele(args):
     return 'tele to %s (%s) at %.1f %.1f %.1f' % (args, _name(entity), where[0], where[1], where[2])
 
 
+def _gameclient():
+    # The engine object: the retail modules use it as a global they never import (the engine puts it
+    # into their namespace), e.g. client.inputstate.wonkavator. Take it from one that has it.
+    for name in ('client.inputstate.wonkavator', 'client.gameui', 'client.gameuiutil'):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, 'gameclient'):
+            return module.gameclient
+    for module in sys.modules.values():
+        if module is not None and hasattr(module, 'gameclient'):
+            return module.gameclient
+    raise ImportError('no module has gameclient')
+
+
+def _camera_yaw():
+    # The camera's yaw in radians, atan2(x, z) of the look vector (0 = +z).
+    return _gameclient().GetGameUIManager().GetDisplayWorld().GetCameraDir()[0]
+
+
+def _yaw_diff(target, current):
+    d = target - current
+    while d > math.pi:
+        d -= 2 * math.pi
+    while d < -math.pi:
+        d += 2 * math.pi
+    return d
+
+
+def _start_turn(yaw, what):
+    # Turn the camera as the turn keys do (UserController.TurnLeft/TurnRight), stopped in _look_step.
+    _look[0] = {'yaw': yaw, 'dir': 0, 'until': time.time() + 10.0, 'what': what}
+    return 'turning to %.1f degrees (%s)' % (math.degrees(yaw), what)
+
+
+def _look_step():
+    # True while a camera turn is going on: the queue waits for it.
+    look = _look[0]
+    if look is None:
+        return False
+    controller = _gameclient().GetUserController()
+    d = _yaw_diff(look['yaw'], _camera_yaw())
+    if abs(d) < LOOK_TOLERANCE or time.time() > look['until']:
+        if look['dir'] > 0:
+            controller.TurnRight(False)
+        elif look['dir'] < 0:
+            controller.TurnLeft(False)
+        _look[0] = None
+        _say('look: %s, off by %.1f degrees' % (look['what'], math.degrees(d)))
+        return False
+    want = 1
+    if d < 0:
+        want = -1
+    if want != look['dir']:
+        if look['dir'] > 0:
+            controller.TurnRight(False)
+        elif look['dir'] < 0:
+            controller.TurnLeft(False)
+        if want > 0:
+            controller.TurnRight(True)
+        else:
+            controller.TurnLeft(True)
+        look['dir'] = want
+    return True
+
+
+def _cmd_camera(args):
+    return _start_turn(math.radians(float(args)), 'yaw %s' % (args,))
+
+
+def _cmd_look(args):
+    # look <entityId>: turn the camera from the player towards the entity.
+    entity = _entity(long(args.split()[0]))
+    there = _position(entity)
+    here = _position(_player())
+    if there is None or here is None:
+        return 'look %s: not here' % (args,)
+    yaw = math.atan2(there[0] - here[0], there[2] - here[2])
+    return _start_turn(yaw, '%s (%s), %.1f m' % (args, _name(entity),
+                       math.sqrt((there[0] - here[0]) ** 2 + (there[2] - here[2]) ** 2)))
+
+
+def _cmd_py(args):
+    # py <expression>: evaluate in the client (a test aid: the command file is local to the game folder).
+    space = {'gameclient': _gameclient(), 'player': _player(), 'entity': _entity, 'math': math, 'sys': sys}
+    return repr(eval(args, space))[:1500]
+
+
 def _cmd_reload(args):
     import clientmod_quest_helper
     import client.gameui
@@ -651,6 +745,7 @@ COMMANDS = {
     'waitworld': _cmd_waitworld, 'near': _cmd_near, 'usename': _cmd_usename,
     'ability': _cmd_ability, 'loot': _cmd_loot, 'kill': _cmd_kill, 'killname': _cmd_killname,
     'tele': _cmd_tele, 'reload': _cmd_reload, 'pick': _cmd_pick, 'turnin': _cmd_turnin,
+    'camera': _cmd_camera, 'look': _cmd_look, 'py': _cmd_py,
 }
 
 
@@ -727,6 +822,9 @@ def _write_state():
             lines.append('reward choice: required, picked %s' % (_private(window, 'rewardSelection'),))
     lines.append('helper %s' % ({None: 'waiting for the account level', True: 'on', False: 'off'}[_allowed[0]],))
     lines.append('queue %d' % (len(_queue),))
+    # idle: nothing queued, no wait, kill or camera turn going on (an outside program waits for this).
+    idle = not _queue and _kill[0] is None and _look[0] is None and time.time() >= _wait_until[0]
+    lines.append('idle %d' % (int(idle),))
     lines.append('results:')
     lines.extend(_results)
     try:
@@ -818,10 +916,10 @@ def _update(msec):
                 _decide(False, 'no answer to %s in %d ms' % (PROBE_COMMAND, PROBE_TIMEOUT_MS))
         if _allowed[0] is False:
             del _queue[:]
-        busy = _kill_step()
+        busy = _kill_step() or _look_step()
         while _allowed[0] and _queue and not busy and time.time() >= _wait_until[0] and _world_ready():
             _run(_queue.pop(0))
-            busy = _kill[0] is not None
+            busy = _kill[0] is not None or _look[0] is not None
         if _since_state[0] >= STATE_MS:
             _since_state[0] = 0
             _write_state()
