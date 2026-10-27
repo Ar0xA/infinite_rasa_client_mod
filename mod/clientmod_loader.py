@@ -1,19 +1,19 @@
-# Infinite Rasa client mod loader.
+# Infinite Rasa client mod: the part that is the same for both ways to load the mod.
 #
-# tabula_rasa.exe sets sys.path to ['python_nca_internal', '<game>/trpython.zip',
-# '<game>/trpython.zip/client/system'] and then imports clientbootstrap and calls
-# clientbootstrap.boot(). This folder comes first, so this file is found before the
-# retail module. It loads the retail clientbootstrap from trpython.zip, so the game
-# starts exactly as before, and adds a hook that sees modules as they are imported.
+#   - python_nca_internal (side-load): clientbootstrap.py calls install() and, at boot,
+#     load_native_modules().
+#   - tabula_rasa.cfg (mod folder): the folder is a [Data] path, so the retail boot puts it
+#     on sys.path; its generated/__init__.py calls start() when the client first imports
+#     the game tables.
+#
+# install() adds a hook that sees modules as they are imported and changes the mission
+# tables, the language tables and some UI modules (quest helper, movable windows).
 #
 # Python 2.4: no 'with', no conditional expressions, no 'except X as e'.
-# Nothing here may stop the game from starting: every mod step is guarded, and only
-# a failure to load the retail module itself is raised.
+# Nothing here may stop the game from starting: every mod step is guarded.
 
 import sys
-import os
 import time
-import zipimport
 import __builtin__
 
 LOG_NAME = 'client_mod.log'
@@ -23,7 +23,7 @@ WATCH_WORDS = ('mission', 'objectiveconversation', 'clientlanguagemanager', 'cli
                'client.inputhandlers', 'client.gameui')
 
 
-def _log(message):
+def log(message):
     try:
         f = open(LOG_NAME, 'a')
         try:
@@ -34,29 +34,13 @@ def _log(message):
         pass
 
 
-def _find_archive():
-    for path in sys.path:
-        if os.path.basename(path).lower() == 'trpython.zip':
-            return path
-    return None
-
-
-def _load_retail():
-    archive = _find_archive()
-    if archive is None:
-        raise ImportError('client mod: trpython.zip is not on sys.path %r' % (sys.path,))
-    # Take this module out of sys.modules first, so the retail module is a module of
-    # its own; the import that loaded this file then returns the retail one.
-    if sys.modules.get('clientbootstrap') is _this:
-        del sys.modules['clientbootstrap']
-    return zipimport.zipimporter(archive).load_module('clientbootstrap')
-
+_log = log
 
 # Import watcher: logs the first time a watched module appears in sys.modules.
 # Later steps (adding mission rows) hang off _on_module_loaded.
 _seen = {}
 _module_count = [0]
-_real_import = __builtin__.__import__
+_real_import = [None]
 
 # Text variants: each language table holds a text twice, keyed (textId, 1) and (textId, 2).
 TEXT_VARIANTS = (1, 2)
@@ -198,7 +182,7 @@ def _scan_new_modules():
 
 
 def _watching_import(*args, **kwargs):
-    module = _real_import(*args, **kwargs)
+    module = _real_import[0](*args, **kwargs)
     try:
         _scan_new_modules()
         if _pending:
@@ -208,10 +192,15 @@ def _watching_import(*args, **kwargs):
     return module
 
 
-def _load_native_modules():
-    # Native modules (.pyd DLLs in python_nca_internal): importing one runs its native code.
-    import clientmod_data
-    for name in getattr(clientmod_data, 'NATIVE_MODULES', ()):
+def load_native_modules():
+    # Native modules (.pyd DLLs on sys.path): importing one runs its native code.
+    try:
+        import clientmod_data
+        names = getattr(clientmod_data, 'NATIVE_MODULES', ())
+    except:
+        _log('native modules failed: %s' % (sys.exc_info()[1],))
+        return
+    for name in names:
         try:
             module = __import__(name)
             info = ''
@@ -222,32 +211,30 @@ def _load_native_modules():
             _log('native module %s not loaded: %s' % (name, sys.exc_info()[1]))
 
 
-def _wrap_boot(retail):
-    real_boot = retail.boot
+def install():
+    # Puts the import hook in place once. Returns True if it is in place.
+    if _real_import[0] is not None:
+        return True
+    try:
+        _real_import[0] = __builtin__.__import__
+        __builtin__.__import__ = _watching_import
+        return True
+    except:
+        _real_import[0] = None
+        _log('loader setup failed, game continues without the mod: %s' % (sys.exc_info()[1],))
+        return False
 
-    def boot(*args, **kwargs):
-        _log('boot: sys.path=%r' % (sys.path,))
+
+def start(how):
+    # Entry point of the tabula_rasa.cfg way (the mod folder's generated/__init__.py).
+    if _real_import[0] is not None:
+        return
+    _log('loader started (%s): sys.path=%r' % (how, sys.path))
+    load_native_modules()
+    if install():
+        _log('loader ready')
+        # Modules loaded before this point (the UI and the game modules) are seen now.
         try:
-            _load_native_modules()
+            _scan_new_modules()
         except:
-            _log('native modules failed: %s' % (sys.exc_info()[1],))
-        return real_boot(*args, **kwargs)
-
-    retail.boot = boot
-
-
-_this = sys.modules.get('clientbootstrap')
-_log('loader started: cwd=%r sys.path=%r' % (os.getcwd(), sys.path))
-_retail = _load_retail()
-
-try:
-    _wrap_boot(_retail)
-    __builtin__.__import__ = _watching_import
-    _log('loader ready')
-except:
-    _log('loader setup failed, game continues without the mod: %s' % (sys.exc_info()[1],))
-
-# If this module object is used after all, it forwards to the retail one.
-for _name, _value in _retail.__dict__.items():
-    if not _name.startswith('__'):
-        globals()[_name] = _value
+            _log('first scan failed: %s' % (sys.exc_info()[1],))

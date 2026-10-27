@@ -28,7 +28,7 @@ the server's World database (`mission_content_definition`, `npc_package`).
 ## 2. Client side (this repo)
 
 The client builds every mission text itself from four tables in `data/game.zip`. The server
-sends only ids, never text. `python_nca_internal/clientbootstrap.py` adds rows to these tables
+sends only ids, never text. `mod/clientmod_loader.py` adds rows to these tables
 when the client first loads them; `clientmod_data.py` holds the data.
 
 | Client table | Key -> value | Used for |

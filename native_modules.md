@@ -1,7 +1,7 @@
 # Native modules (DLLs)
 
-The loader can run native code in the game process: it imports `.pyd` files from
-`python_nca_internal`. A `.pyd` is a normal Windows DLL that Python loads as a module.
+The loader can run native code in the game process: it imports `.pyd` files from the
+mod folder (`mods/infinite_rasa`, or `python_nca_internal` in the side-load way). A `.pyd` is a normal Windows DLL that Python loads as a module.
 Tested in the client on 2026-10-20 under Wine 11.0 (Proton): the example module loaded,
 logged from native code, answered a call from Python and changed the window title.
 
@@ -11,8 +11,8 @@ Off by default. To use it, build the example and enable it (see below).
 
 - `tabula_rasa.exe` embeds Python 2.4 (`python24.dll`), and that Python can import C
   extension modules: `python24.dll` contains `load_dynamic` and the `.pyd` suffix.
-- `python_nca_internal` is the first entry of `sys.path`, so `import name` finds
-  `python_nca_internal/name.pyd`.
+- The mod folder is on `sys.path` (a `[Data]` path in `tabula_rasa.cfg`, or
+  `python_nca_internal`, the first entry), so `import name` finds `name.pyd` in it.
 - Importing `name.pyd` calls its exported function `initname()`. From there the DLL can do
   anything a DLL can: start threads, call Windows APIs, `LoadLibrary` other DLLs, hook
   functions.
@@ -28,8 +28,9 @@ Requirements for a `.pyd`:
 
 ## How the loader loads it
 
-`clientbootstrap.py`, `_load_native_modules()`, runs at the start of `boot()` (before the
-game sets up its UI). For each name in `clientmod_data.NATIVE_MODULES` it does
+`clientmod_loader.load_native_modules()` runs when the mod starts: when the client first
+imports the game tables (mod folder way, right after `InitApp`), or at the start of
+`boot()` (side-load way). Both are before the game sets up its UI. For each name in `clientmod_data.NATIVE_MODULES` it does
 `__import__(name)`, calls `module.info()` if the module has it, and logs the result:
 
 ```
@@ -67,8 +68,8 @@ and user32 are called, no C runtime functions.
    ZIG="/tmp/zigenv/bin/python -m ziglang" native/build.sh   # Zig
    CC=i686-w64-mingw32-gcc native/build.sh                    # or MinGW
    ```
-   This writes `python_nca_internal/clientmod_native.pyd` (not in git: `*.pyd` is ignored).
-3. In `python_nca_internal/clientmod_data.py`, remove the `#` in front of
+   This writes `mod/clientmod_native.pyd` (not in git: `*.pyd` is ignored).
+3. In `mod/clientmod_data.py`, remove the `#` in front of
    `'clientmod_native'` in `NATIVE_MODULES`.
 4. `./install.sh "<game folder>"` and start the game. The window title ends with
    `[Infinite Rasa mod]`; `client_mod.log` has the `native` lines above.
